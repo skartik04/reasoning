@@ -232,8 +232,8 @@ if __name__ == "__main__":
     verbose = True
 
     # model_name = "Qwen/Qwen3-1.7B"
-    model_name = "Qwen/Qwen3-4B"
-    # model_name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
+    # model_name = "Qwen/Qwen3-4B"
+    model_name = "Qwen/Qwen3-8B"
     
     print("=" * 60)
     print("Running Residual Capture Analysis")
