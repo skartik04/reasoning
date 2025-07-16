@@ -326,9 +326,11 @@ def monitor_performance(device, step_name):
     reserved = torch.cuda.memory_reserved(0) / 1024**3
     print(f"[{step_name}] GPU Memory - Allocated: {allocated:.1f} GB, Reserved: {reserved:.1f} GB")
 
-def save_progress_and_exit(questions_data, inference_file, error_msg):
+def save_progress_and_exit(questions_data, inference_file, error_msg, error_details=None):
     """Save current progress and exit gracefully"""
     print(f"\n🚨 {error_msg}")
+    if error_details:
+        print(f"🚨 Error details: {error_details}")
     print(f"💾 Saving {len(questions_data)} completed responses before exiting...")
     
     if questions_data:
@@ -380,7 +382,7 @@ def run_complete_experiment(harmful_questions, model, tokenizer, device, client,
                 # Generate think response
                 think_response = generate_response(question, model, tokenizer, device, use_nothink=False, max_new_tokens=max_new_tokens)
                 if "ERROR:" in think_response:
-                    save_progress_and_exit(questions_data, inference_file, f"GPU error during think response generation for question {question_id}")
+                    save_progress_and_exit(questions_data, inference_file, f"GPU error during think response generation for question {question_id}", think_response)
                 
                 if verbose:
                     print(f"THINK Response:")
@@ -390,7 +392,7 @@ def run_complete_experiment(harmful_questions, model, tokenizer, device, client,
                 # Generate nothink response
                 nothink_response = generate_response(question, model, tokenizer, device, use_nothink=True, max_new_tokens=max_new_tokens)
                 if "ERROR:" in nothink_response:
-                    save_progress_and_exit(questions_data, inference_file, f"GPU error during nothink response generation for question {question_id}")
+                    save_progress_and_exit(questions_data, inference_file, f"GPU error during nothink response generation for question {question_id}", nothink_response)
                 
                 if verbose:
                     print(f"NOTHINK Response:")
@@ -399,12 +401,12 @@ def run_complete_experiment(harmful_questions, model, tokenizer, device, client,
                 
             except RuntimeError as e:
                 if "cuda" in str(e).lower() or "gpu" in str(e).lower() or "out of memory" in str(e).lower():
-                    save_progress_and_exit(questions_data, inference_file, f"GPU RuntimeError during question {question_id}: {e}")
+                    save_progress_and_exit(questions_data, inference_file, f"GPU RuntimeError during question {question_id}", str(e))
                 else:
                     raise e
             except Exception as e:
                 if "cuda" in str(e).lower() or "gpu" in str(e).lower():
-                    save_progress_and_exit(questions_data, inference_file, f"GPU Exception during question {question_id}: {e}")
+                    save_progress_and_exit(questions_data, inference_file, f"GPU Exception during question {question_id}", str(e))
                 else:
                     raise e
             
@@ -422,8 +424,8 @@ def run_complete_experiment(harmful_questions, model, tokenizer, device, client,
                 print(f"⏱️  Question {question_id} completed in {question_time:.1f} seconds")
                 monitor_performance(device, f"After Q{question_id}")
             
-            # Save every 20 questions (increased from 5)
-            if (question_id - offset) % 100 == 0:
+            # Save every 50 questions
+            if (question_id - offset) % 50 == 0:
                 with open(inference_file, 'w') as f:
                     json.dump(questions_data, f, indent=2)
                 avg_time = (time.time() - start_time) / len(questions_data)
@@ -434,7 +436,7 @@ def run_complete_experiment(harmful_questions, model, tokenizer, device, client,
         save_progress_and_exit(questions_data, inference_file, "Interrupted by user (Ctrl+C)")
     except Exception as e:
         if "cuda" in str(e).lower() or "gpu" in str(e).lower():
-            save_progress_and_exit(questions_data, inference_file, f"Unexpected GPU error: {e}")
+            save_progress_and_exit(questions_data, inference_file, f"Unexpected GPU error", str(e))
         else:
             # For non-GPU errors, still save progress but re-raise
             print(f"\n🚨 Unexpected error: {e}")
@@ -517,8 +519,8 @@ def run_complete_experiment(harmful_questions, model, tokenizer, device, client,
 
 if __name__ == "__main__":
     # Configuration
-    offset = 0
-    n = 570  # Number of questions to process
+    offset = 106
+    n = 400  # Number of questions to process
     dataset_path = "playground/dataset/splits/harmful_test.json"
     # model_name = "Qwen/Qwen3-1.7B"
     model_name = "Qwen/Qwen3-4B"
