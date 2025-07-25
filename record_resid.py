@@ -14,17 +14,62 @@ def format_prompt(prompt):
     """Format prompt with Qwen chat template"""
     return QWEN_CHAT_TEMPLATE.format(prompt=prompt)
 
-def load_harmful_dataset(dataset_path="playground/dataset/splits/harmful_test.json"):
-    """Load harmful questions dataset"""
-    print(f"Loading dataset: {dataset_path}")
-    if not os.path.exists(dataset_path):
-        raise FileNotFoundError(f"Dataset not found at {dataset_path}")
+def load_dataset_questions(dataset_path=None, dataset_name=None, n_samples=None):
+    """Load questions from various dataset sources
     
-    with open(dataset_path, 'r') as f:
-        harmful = json.load(f)
+    Args:
+        dataset_path (str): Path to local JSON file (for harmful datasets)
+        dataset_name (str): HuggingFace dataset name 
+        n_samples (int): Number of samples to take
     
-    print(f"Loaded {len(harmful)} harmful questions")
-    return harmful
+    Returns:
+        list: List of question strings
+    """
+    questions = []
+    
+    if dataset_path:
+        # Load from local JSON file (harmful datasets)
+        print(f"Loading dataset from path: {dataset_path}")
+        if not os.path.exists(dataset_path):
+            raise FileNotFoundError(f"Dataset not found at {dataset_path}")
+        
+        with open(dataset_path, 'r') as f:
+            data = json.load(f)
+        
+        # Extract questions (assumes format like harmful datasets)
+        if isinstance(data, list) and len(data) > 0:
+            if isinstance(data[0], dict) and 'instruction' in data[0]:
+                questions = [item['instruction'] for item in data]
+            elif isinstance(data[0], str):
+                questions = data
+        
+        print(f"Loaded {len(questions)} questions from {dataset_path}")
+        
+    elif dataset_name:
+        # Load from HuggingFace datasets
+        from datasets import load_dataset
+        print(f"Loading dataset: {dataset_name}")
+        ds = load_dataset(dataset_name)
+        
+        # Extract questions (adjust key based on dataset)
+        if 'Question' in ds['train'][0]:
+            questions = [item['Question'] for item in ds['train']]
+        elif 'question' in ds['train'][0]:
+            questions = [item['question'] for item in ds['train']]
+        else:
+            # Print available keys to help debug
+            print(f"Available keys: {list(ds['train'][0].keys())}")
+            raise ValueError("Could not find question field in dataset")
+        
+        print(f"Loaded {len(questions)} questions from {dataset_name}")
+    
+    # Sample if requested
+    if n_samples and n_samples < len(questions):
+        random.seed(0)
+        questions = random.sample(questions, n_samples)
+        print(f"Sampled {len(questions)} questions")
+    
+    return questions
 
 def get_model_filename(model_name):
     """Convert model name to a safe filename"""
@@ -78,163 +123,131 @@ def setup_hooks(model):
     
     return residuals
 
-def run_residual_experiment(harmful_questions, model, tokenizer, model_name, residuals, n=100, verbose=True):
+def save_residuals_to_pt(residuals_data: dict, model_name: str, title: str = "residuals", filename: str = None, output_folder: str = ".") -> str:
+    """Save residuals tensor data to a .pt file"""
+    # Clean model name for folder (replace / with _)
+    clean_model_name = model_name.replace("/", "_").replace("-", "_")
+    
+    # Create model-specific folder inside output folder
+    model_folder = os.path.join(output_folder, clean_model_name)
+    os.makedirs(model_folder, exist_ok=True)
+    
+    if filename is None:
+        filename = f"{title}.pt"
+    
+    # Save to model folder
+    filepath = os.path.join(model_folder, filename)
+    
+    # Save tensor data
+    torch.save(residuals_data, filepath)
+    
+    print(f"Residuals saved to: {filepath}")
+    return filepath
+
+def process_mode(questions, model, tokenizer, residuals, think_mode=True, n=100, verbose=True):
+    """Process questions in specified mode and capture residuals
+    
+    Args:
+        questions (list): List of question strings to process
+        think_mode (bool): If True, process in THINK mode. If False, process in NOTHINK mode.
     """
-    Run residual capture experiment: generate both think and nothink responses,
-    capture residuals for all layers, and extract EOI tokens
-    EOI tokens are End-of-Instruction tokens: the tokens after user prompt before assistant response
-    """
-    print(f"Running residual experiment with {n} questions...")
+    mode_str = "THINK" if think_mode else "NOTHINK"
+    print(f"Processing {min(n, len(questions))} questions in {mode_str} mode...")
     print("=" * 60)
     
     # Get EOI tokens - these are the tokens after {prompt} in the template
     eoi_tokens = _get_eoi_toks(tokenizer)
-    print(f"EOI tokens: {eoi_tokens} (length: {len(eoi_tokens)})")
+    if verbose:
+        print(f"EOI tokens: {eoi_tokens} (length: {len(eoi_tokens)})")
     
     # Get model dimensions
     num_layers = len(model.model.layers)
     hidden_size = model.config.hidden_size
+    n_eoi_tokens = len(eoi_tokens)
+    actual_n = min(n, len(questions))
     
-    # Step 1: Process think mode
-    print("\nStep 1: Processing THINK mode...")
-    think_pre_residuals = []  # List to store pre residuals for each question
-    think_post_residuals = []  # List to store post residuals for each question
+    # Pre-allocate tensors for all prompts
+    # Shape: (n_prompts, n_layers, n_eoi_tokens, hidden_size)
+    pre_residuals = torch.zeros(actual_n, num_layers, n_eoi_tokens, hidden_size)
+    post_residuals = torch.zeros(actual_n, num_layers, n_eoi_tokens, hidden_size)
     
-    for i in range(min(n, len(harmful_questions))):
-        question = harmful_questions[i]['instruction']
-        question_id = i + 1
+    for i in range(actual_n):
+        question = questions[i]
+        question_id = i
         
         if verbose and i % 10 == 0:
-            print(f"Processing Question {question_id} (THINK mode)")
+            print(f"Processing Question {question_id} ({mode_str} mode)")
         
         # Clear residuals for this question
         residuals.clear()
         
-        # Format prompt for think mode
-        formatted_prompt = format_prompt(question)
+        # Format prompt based on mode
+        if think_mode:
+            formatted_prompt = format_prompt(question)
+        else:
+            nothink_question = question + " /nothink"
+            formatted_prompt = format_prompt(nothink_question)
+            
         inputs = tokenizer(formatted_prompt, return_tensors="pt").to(model.device)
         
         # Run model to capture residuals
         with torch.no_grad():
             outputs = model(**inputs)
         
-        # Extract EOI token residuals and stack into matrices
-        # Shape: [layers, len(eoi_tokens), hidden_size]
-        pre_matrix = torch.zeros(num_layers, len(eoi_tokens), hidden_size)
-        post_matrix = torch.zeros(num_layers, len(eoi_tokens), hidden_size)
-        
+        # Extract EOI token residuals and store directly in pre-allocated tensors
         for layer_idx in range(num_layers):
             if layer_idx in residuals:
-                # Get the last len(eoi_tokens) positions for EOI tokens
+                # Get the last n_eoi_tokens positions for EOI tokens
                 if "pre" in residuals[layer_idx]:
                     pre_tensor = residuals[layer_idx]["pre"]
-                    if pre_tensor.size(1) >= len(eoi_tokens):
-                        pre_matrix[layer_idx] = pre_tensor[0, -len(eoi_tokens):, :].cpu()
+                    if pre_tensor.size(1) >= n_eoi_tokens:
+                        pre_residuals[i, layer_idx] = pre_tensor[0, -n_eoi_tokens:, :].cpu()
                 
                 if "post" in residuals[layer_idx]:
                     post_tensor = residuals[layer_idx]["post"]
-                    if post_tensor.size(1) >= len(eoi_tokens):
-                        post_matrix[layer_idx] = post_tensor[0, -len(eoi_tokens):, :].cpu()
-        
-        think_pre_residuals.append(pre_matrix)
-        think_post_residuals.append(post_matrix)
+                    if post_tensor.size(1) >= n_eoi_tokens:
+                        post_residuals[i, layer_idx] = post_tensor[0, -n_eoi_tokens:, :].cpu()
     
-    print(f"Completed THINK mode processing for {len(think_pre_residuals)} questions")
+    print(f"Completed {mode_str} mode processing for {actual_n} questions")
     
-    # Step 2: Process nothink mode
-    print("\nStep 2: Processing NOTHINK mode...")
-    nothink_pre_residuals = []  # List to store pre residuals for each question
-    nothink_post_residuals = []  # List to store post residuals for each question
+    # Create residuals data dict in the same format as generate_resp.py
+    residuals_data = {
+        'pre': pre_residuals,
+        'post': post_residuals,
+        'metadata': {
+            'n_prompts': actual_n,
+            'n_layers': num_layers,
+            'n_eoi_tokens': n_eoi_tokens,
+            'd_model': hidden_size,
+            'eoi_token_ids': eoi_tokens,
+            'questions': questions[:actual_n],
+            'mode': mode_str,
+            'shape_description': '(n_prompts, n_layers, n_eoi_tokens, d_model)'
+        }
+    }
     
-    for i in range(min(n, len(harmful_questions))):
-        question = harmful_questions[i]['instruction']
-        question_id = i + 1
-        
-        if verbose and i % 10 == 0:
-            print(f"Processing Question {question_id} (NOTHINK mode)")
-        
-        # Clear residuals for this question
-        residuals.clear()
-        
-        # Format prompt for nothink mode
-        nothink_question = question + " /nothink"
-        formatted_prompt = format_prompt(nothink_question)
-        inputs = tokenizer(formatted_prompt, return_tensors="pt").to(model.device)
-        
-        # Run model to capture residuals
-        with torch.no_grad():
-            outputs = model(**inputs)
-        
-        # Extract EOI token residuals and stack into matrices
-        # Shape: [layers, len(eoi_tokens), hidden_size]
-        pre_matrix = torch.zeros(num_layers, len(eoi_tokens), hidden_size)
-        post_matrix = torch.zeros(num_layers, len(eoi_tokens), hidden_size)
-        
-        for layer_idx in range(num_layers):
-            if layer_idx in residuals:
-                # Get the last len(eoi_tokens) positions for EOI tokens
-                if "pre" in residuals[layer_idx]:
-                    pre_tensor = residuals[layer_idx]["pre"]
-                    if pre_tensor.size(1) >= len(eoi_tokens):
-                        pre_matrix[layer_idx] = pre_tensor[0, -len(eoi_tokens):, :].cpu()
-                
-                if "post" in residuals[layer_idx]:
-                    post_tensor = residuals[layer_idx]["post"]
-                    if post_tensor.size(1) >= len(eoi_tokens):
-                        post_matrix[layer_idx] = post_tensor[0, -len(eoi_tokens):, :].cpu()
-        
-        nothink_pre_residuals.append(pre_matrix)
-        nothink_post_residuals.append(post_matrix)
-    
-    print(f"Completed NOTHINK mode processing for {len(nothink_pre_residuals)} questions")
-    
-    # Step 3: Save results
-    print("\nStep 3: Saving results...")
-    
-    # Create model-specific filename
-    model_filename = get_model_filename(model_name)
-    
-    # Stack all questions into single tensors
-    # Shape: [questions, layers, len(eoi_tokens), hidden_size]
-    think_pre_stacked = torch.stack(think_pre_residuals, dim=0)
-    think_post_stacked = torch.stack(think_post_residuals, dim=0)
-    nothink_pre_stacked = torch.stack(nothink_pre_residuals, dim=0)
-    nothink_post_stacked = torch.stack(nothink_post_residuals, dim=0)
-    
-    # Save think residuals
-    think_output_file = f'residuals/residuals_think_{model_filename}.pt'
-    torch.save({
-        'pre': think_pre_stacked,
-        'post': think_post_stacked,
-        'eoi_token_ids': eoi_tokens,
-        'questions': [harmful_questions[i]['instruction'] for i in range(min(n, len(harmful_questions)))]
-    }, think_output_file)
-    
-    # Save nothink residuals
-    nothink_output_file = f'residuals/residuals_nothink_{model_filename}.pt'
-    torch.save({
-        'pre': nothink_pre_stacked,
-        'post': nothink_post_stacked,
-        'eoi_token_ids': eoi_tokens,
-        'questions': [harmful_questions[i]['instruction'] for i in range(min(n, len(harmful_questions)))]
-    }, nothink_output_file)
-    
-    print(f"THINK residuals saved to: {think_output_file}")
-    print(f"NOTHINK residuals saved to: {nothink_output_file}")
-    print(f"Residual shapes: {think_pre_stacked.shape} [questions, layers, eoi_tokens, hidden_size]")
-    
-    return think_pre_stacked, think_post_stacked, nothink_pre_stacked, nothink_post_stacked
+    return residuals_data
 
 if __name__ == "__main__":
     # Configuration
     n = 100  # Number of questions to process
-    dataset_path = "playground/dataset/splits/harmful_test.json"
     verbose = True
-
-    # model_name = "Qwen/Qwen3-1.7B"
-    # model_name = "Qwen/Qwen3-4B"
-    model_name = "Qwen/Qwen3-8B"
+    output_folder_residuals = 'residuals/general_knowledge'
+    model_name = "Qwen/Qwen3-4B"
+    dataset_name = "MuskumPillerum/General-Knowledge"
     
+    # Load questions from dataset using the same pattern as generate_resp.py
+    questions = load_dataset_questions(dataset_name=dataset_name, n_samples=None)
+    
+    # Create random indices for sampling (same pattern as generate_resp.py)
+    random.seed(0)
+    random_indices = random.sample(range(len(questions)), n)
+    
+    # Extract questions using random indices
+    sampled_questions = [questions[idx] for idx in random_indices]
+    
+    print(f"Dataset loaded with {len(questions)} total questions")
+    print(f"Sampled {len(sampled_questions)} questions using random seed 0")
     print("=" * 60)
     print("Running Residual Capture Analysis")
     print("=" * 60)
@@ -246,23 +259,43 @@ if __name__ == "__main__":
     residuals = setup_hooks(model)
     
     # Create residuals directory if it doesn't exist
-    os.makedirs("residuals", exist_ok=True)
+    os.makedirs(output_folder_residuals, exist_ok=True)
     
-    # Load harmful dataset
-    harmful_questions = load_harmful_dataset(dataset_path)
-    
-    # Run residual experiment
-    think_pre, think_post, nothink_pre, nothink_post = run_residual_experiment(
-        harmful_questions, model, tokenizer, model_name, residuals,
-        n=n, verbose=verbose
+    # Process THINK mode
+    print("\nStep 1: Processing THINK mode...")
+    think_residuals_data = process_mode(
+        sampled_questions, model, tokenizer, residuals, 
+        think_mode=True, n=n, verbose=verbose
     )
     
-    if think_pre is not None and think_post is not None and nothink_pre is not None and nothink_post is not None:
+    # Save think residuals
+    think_filepath = save_residuals_to_pt(
+        think_residuals_data, 
+        model_name=model_name, 
+        title="think_residuals", 
+        output_folder=output_folder_residuals
+    )
+    
+    # Process NOTHINK mode
+    print("\nStep 2: Processing NOTHINK mode...")
+    nothink_residuals_data = process_mode(
+        sampled_questions, model, tokenizer, residuals, 
+        think_mode=False, n=n, verbose=verbose
+    )
+    
+    # Save nothink residuals
+    nothink_filepath = save_residuals_to_pt(
+        nothink_residuals_data, 
+        model_name=model_name, 
+        title="nothink_residuals", 
+        output_folder=output_folder_residuals
+    )
+    
+    if think_residuals_data is not None and nothink_residuals_data is not None:
         print("\nExperiment completed successfully!")
-        model_filename = get_model_filename(model_name)
-        print(f"THINK residuals saved to: residuals/residuals_think_{model_filename}.pt")
-        print(f"NOTHINK residuals saved to: residuals/residuals_nothink_{model_filename}.pt")
-        print(f"Total questions processed: {think_pre.size(0)}")
-        print(f"Shape: [questions={think_pre.size(0)}, layers={think_pre.size(1)}, eoi_tokens={think_pre.size(2)}, hidden_size={think_pre.size(3)}]")
+        print(f"THINK residuals saved to: {think_filepath}")
+        print(f"NOTHINK residuals saved to: {nothink_filepath}")
+        print(f"Total questions processed: {think_residuals_data['pre'].size(0)}")
+        print(f"Shape: [n_prompts={think_residuals_data['pre'].size(0)}, n_layers={think_residuals_data['pre'].size(1)}, n_eoi_tokens={think_residuals_data['pre'].size(2)}, d_model={think_residuals_data['pre'].size(3)}]")
     else:
         print("Experiment failed. Please check your setup.")
