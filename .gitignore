@@ -1,3 +1,6 @@
 *.json
 *.pt
 __pycache__/
+*.png
+*.csv
+*.txt
