@@ -401,8 +401,8 @@ def main():
     # Configuration - change these variables as needed
     # model_name = 'Qwen/Qwen3-1.7B'
     # model_name = 'Qwen/Qwen3-4B' 
-    # model_name = 'meta-llama/Llama-2-7b-chat-hf'
-    model_name = 'meta-llama/Llama-3.1-8B-Instruct'
+    model_name = 'meta-llama/Llama-2-7b-chat-hf'
+    # model_name = 'meta-llama/Llama-3.1-8B-Instruct'
     n = 100  # Number of items to process (set to 0 for all)
     
     model_folder_name = clean_model_name(model_name)
