@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Temporary script to run waluigi_generation.py with all models sequentially.
-This script will run overnight and handle errors gracefully.
+Script to run fake_real.py with all models sequentially.
+This script will run all 3 models and handle errors gracefully.
 """
 
 import subprocess
@@ -16,7 +16,7 @@ def log_message(message):
     print(f"[{timestamp}] {message}")
 
 def run_model(model_name, script_path):
-    """Run waluigi_generation.py with a specific model."""
+    """Run fake_real.py with a specific model."""
     log_message(f"Starting generation for model: {model_name}")
     
     try:
@@ -91,14 +91,15 @@ def run_model(model_name, script_path):
 
 def main():
     """Main function to run all models sequentially."""
-    script_path = '/mnt/SSD7/kartik/reasoning/waluigi_generation.py'
+    script_path = '/mnt/SSD7/kartik/reasoning/fake_real.py'
     
     models = [
+        'Qwen/Qwen3-4B-Instruct-2507',
         'meta-llama/Llama-2-7b-chat-hf',
-        'Qwen/Qwen3-4B-Instruct-2507'
+        'meta-llama/Llama-3.1-8B-Instruct'
     ]
     
-    log_message("🎭 Starting overnight waluigi generation for all models")
+    log_message("🧪 Starting fake token generation for all models")
     log_message(f"Models to process: {models}")
     
     start_time = datetime.now()

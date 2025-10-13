@@ -103,9 +103,9 @@ def truncate_at_sentence_middle(text: str) -> str:
     import re
     sentence_endings = list(re.finditer(r'[.!?]\s+', text))
     
-    if len(sentence_endings) >= 2:
+    if len(sentence_endings) >= 1:
         # Take at least 2 full sentences
-        second_sentence_end = sentence_endings[1].end()
+        second_sentence_end = sentence_endings[0].end()
         remaining_text = text[second_sentence_end:]
         
         if remaining_text.strip():
@@ -128,7 +128,7 @@ def truncate_at_sentence_middle(text: str) -> str:
             return text[:first_sentence_end].strip()
     
     # No sentence endings found, just take first 50 words as fallback
-    words = text.split()[:50]
+    words = text.split()[:10]
     return " ".join(words).strip()
 
 def create_chat_completion_prompt(tokenizer, user_question: str, starter_text: str) -> str:
@@ -190,8 +190,8 @@ def main():
     # Configuration - change these variables as needed
     # model_name = 'Qwen/Qwen3-4B' 
     # model_name = 'Qwen/Qwen3-1.7B'
-    # model_name = 'meta-llama/Llama-2-7b-chat-hf'
-    model_name = 'Qwen/Qwen3-4B-Instruct-2507'
+    model_name = 'meta-llama/Llama-2-7b-chat-hf'
+    # model_name = 'Qwen/Qwen3-4B-Instruct-2507'
     max_new_tokens = 1000
     n = 100  # Number of items to process (set to 0 for all)
 
@@ -199,7 +199,8 @@ def main():
     model_folder_name = clean_model_name(model_name)
     
     # Load the dataset
-    dataset_file = '/mnt/SSD7/kartik/reasoning/dataset/qa_harmful.json'
+    dataset_file = '/mnt/SSD7/kartik/reasoning/dataset/qa_harmless.json'
+    data_type = dataset_file.split('/')[-1].split('.')[0].replace('qa_', '')
     print(f"📖 Loading dataset from: {dataset_file}")
     
     with open(dataset_file, 'r') as f:
@@ -306,7 +307,7 @@ def main():
     output_dir = f'/mnt/SSD7/kartik/reasoning/responses/gaslighting_completion/{model_folder_name}'
     os.makedirs(output_dir, exist_ok=True)
     
-    output_file = os.path.join(output_dir, 'gaslighting_completion_results.json')
+    output_file = os.path.join(output_dir, f'gaslighting_completion_results_{data_type}.json')
     
     print(f"💾 Saving results to: {output_file}")
     with open(output_file, 'w', encoding='utf-8') as f:

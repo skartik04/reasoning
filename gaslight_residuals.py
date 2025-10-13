@@ -73,7 +73,7 @@ def get_starter_text(full_response: str) -> str:
         intro_text = full_response[:end_of_intro_pos].strip()
         
         first_list_item_line = match.group(0).strip()
-        words_from_list_item = first_list_item_line.split()[:7]  # Grab first 7 words
+        words_from_list_item = first_list_item_line.split()[:4]  # Grab first 7 words
         
         # Combine the intro and the start of the first list item
         starter_text = intro_text + " ".join(words_from_list_item)
@@ -86,7 +86,7 @@ def get_starter_text(full_response: str) -> str:
         # If we found a paragraph, take it + first 7 words of next paragraph
         remaining_text = full_response[len(first_paragraph)+2:]  # +2 for \n\n
         if remaining_text.strip():
-            next_words = remaining_text.strip().split()[:7]
+            next_words = remaining_text.strip().split()[:4]
             return (first_paragraph + " ".join(next_words)).strip()
         else:
             # No next paragraph, use sentence truncation on first paragraph
@@ -104,14 +104,14 @@ def truncate_at_sentence_middle(text: str) -> str:
     import re
     sentence_endings = list(re.finditer(r'[.!?]\s+', text))
     
-    if len(sentence_endings) >= 2:
+    if len(sentence_endings) >= 1:
         # Take at least 2 full sentences
-        second_sentence_end = sentence_endings[1].end()
+        second_sentence_end = sentence_endings[0].end()
         remaining_text = text[second_sentence_end:]
         
         if remaining_text.strip():
             # Take first 7 words of the sentence after the second one
-            next_words = remaining_text.strip().split()[:7]
+            next_words = remaining_text.strip().split()[:4]
             return (text[:second_sentence_end] + " ".join(next_words)).strip()
         else:
             # No text after second sentence, just return the two sentences
@@ -123,13 +123,13 @@ def truncate_at_sentence_middle(text: str) -> str:
         remaining_text = text[first_sentence_end:]
         
         if remaining_text.strip():
-            next_words = remaining_text.strip().split()[:7]
+            next_words = remaining_text.strip().split()[:4]
             return (text[:first_sentence_end] + " ".join(next_words)).strip()
         else:
             return text[:first_sentence_end].strip()
     
-    # No sentence endings found, just take first 50 words as fallback
-    words = text.split()[:50]
+    # No sentence endings found, just take first 10 words as fallback
+    words = text.split()[:10]
     return " ".join(words).strip()
 
 def create_jailbreak_conversation(tokenizer, user_question: str, full_response: str, model_name: str) -> str:
@@ -408,7 +408,8 @@ def main():
     model_folder_name = clean_model_name(model_name)
     
     # Load the dataset
-    dataset_file = '/mnt/SSD7/kartik/reasoning/dataset/qa_harmful.json'
+    dataset_file = '/mnt/SSD7/kartik/reasoning/dataset/qa_harmless.json'
+    data_type = dataset_file.split('/')[-1].split('.')[0].replace('qa_', '')
     print(f"📖 Loading dataset from: {dataset_file}")
     
     with open(dataset_file, 'r') as f:
@@ -439,12 +440,12 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     
     # Save completion residuals
-    completion_file = os.path.join(output_dir, 'completion_residuals.pt')
+    completion_file = os.path.join(output_dir, f'completion_residuals_{data_type}.pt')
     print(f"💾 Saving completion residuals to: {completion_file}")
     torch.save(completion_residuals, completion_file)
     
     # Save chat completion residuals
-    chat_completion_file = os.path.join(output_dir, 'chat_completion_residuals.pt')
+    chat_completion_file = os.path.join(output_dir, f'chat_completion_residuals_{data_type}.pt')
     print(f"💾 Saving chat completion residuals to: {chat_completion_file}")
     torch.save(chat_completion_residuals, chat_completion_file)
     

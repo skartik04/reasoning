@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Gaslighting generation system using the "Double Hook" strategy.
-Loads harmful Q&A pairs and uses parts of responses as completion starters.
+Test script to experiment with inserting fake tokens as regular text.
+Based on gaslight_generation_chat_completion.py structure.
 """
 
 from dotenv import load_dotenv
@@ -28,7 +28,7 @@ os.environ['TRANSFORMERS_CACHE'] = cache_dir
 
 def load_model_and_tokenizer(model_name: str):
     """Load model and tokenizer for generation."""
-    print(f"Loading model for gaslighting generation: {model_name}")
+    print(f"Loading model for fake token testing: {model_name}")
     
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
@@ -103,14 +103,14 @@ def truncate_at_sentence_middle(text: str) -> str:
     import re
     sentence_endings = list(re.finditer(r'[.!?]\s+', text))
     
-    if len(sentence_endings) >= 1:
+    if len(sentence_endings) >= 2:
         # Take at least 2 full sentences
-        second_sentence_end = sentence_endings[0].end()
+        second_sentence_end = sentence_endings[1].end()
         remaining_text = text[second_sentence_end:]
         
         if remaining_text.strip():
             # Take first 7 words of the sentence after the second one
-            next_words = remaining_text.strip().split()[:4]
+            next_words = remaining_text.strip().split()[:7]
             return (text[:second_sentence_end] + " ".join(next_words)).strip()
         else:
             # No text after second sentence, just return the two sentences
@@ -122,53 +122,141 @@ def truncate_at_sentence_middle(text: str) -> str:
         remaining_text = text[first_sentence_end:]
         
         if remaining_text.strip():
-            next_words = remaining_text.strip().split()[:4]
+            next_words = remaining_text.strip().split()[:7]
             return (text[:first_sentence_end] + " ".join(next_words)).strip()
         else:
             return text[:first_sentence_end].strip()
     
     # No sentence endings found, just take first 50 words as fallback
-    words = text.split()[:10]
+    words = text.split()[:50]
     return " ".join(words).strip()
 
-def create_jailbreak_conversation(tokenizer, user_question: str, full_response: str, model_name: str) -> str:
+def get_fake_tokens_for_model(model_name: str) -> Dict[str, str]:
     """
-    Builds the final jailbreak prompt using the "Specific Completion" method with chat template.
+    Get appropriate fake tokens to insert based on model type.
     """
-    # Get the perfect completion starter using our new function
-    starter_text = get_starter_text(full_response)
+    if "llama" in model_name.lower():
+        if "llama-2" in model_name.lower():
+            # Llama-2 style - include <s> at start to match real template
+            return {
+                "user_start": "<s>[INST] ",
+                "user_end": " [/INST] ",
+                "assistant_start": "",
+                "assistant_end": " </s><s>[INST] "
+            }
+        else:
+            # Llama-3+ style
+            return {
+                "user_start": "<|start_header_id|>user<|end_header_id|>\n\n",
+                "user_end": "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+                "assistant_start": "",
+                "assistant_end": "<|eot_id|>"
+            }
+    elif "qwen" in model_name.lower():
+        # Qwen style (ChatML) - fixed to match real template exactly
+        return {
+            "user_start": "<|im_start|>user\n",
+            "user_end": "<|im_end|>\n<|im_start|>assistant\n",
+            "assistant_start": "",
+            "assistant_end": "<|im_end|>"
+        }
+    else:
+        # Generic/fallback
+        return {
+            "user_start": "<|user|>\n",
+            "user_end": "<|assistant|>\n",
+            "assistant_start": "",
+            "assistant_end": "<|end|>"
+        }
+
+def create_fake_token_prompt(user_question: str, starter_text: str, model_name: str, add_response: bool = True) -> str:
+    """
+    Creates a fake token prompt where tokens are inserted as regular text.
+    Similar to chat completion but with manually inserted fake tokens.
+    """
+    # Combine the original question with the starter text (if enabled) with proper spacing
+    if add_response:
+        combined_user_message = f"""{user_question}\n\n{starter_text}"""
+    else:
+        combined_user_message = user_question
     
-    assistant_content = starter_text
+    # Get fake tokens for this model
+    fake_tokens = get_fake_tokens_for_model(model_name)
     
-    # Create the conversation messages
+    # Create FAKE token conversation (tokens as text)
+    fake_conversation = (
+        fake_tokens["user_start"] + 
+        combined_user_message + 
+        fake_tokens["user_end"] + 
+        fake_tokens["assistant_start"]
+    )
+    
+    return fake_conversation
+
+def create_real_chat_completion_prompt(tokenizer, user_question: str, starter_text: str, add_response: bool = True) -> str:
+    """
+    Creates a traditional chat completion prompt where the user message contains 
+    both the original question and the starter text to complete.
+    """
+    # Combine the original question with the starter text (if enabled) with proper spacing
+    if add_response:
+        combined_user_message = f"""{user_question}\n\n{starter_text}"""
+    else:
+        combined_user_message = user_question
+    
+    # Create the conversation with only a user message
     messages = [
-        {"role": "user", "content": user_question},
-        {"role": "assistant", "content": assistant_content}
+        {"role": "user", "content": combined_user_message}
     ]
     
     # Apply chat template to get the formatted conversation
     formatted_conversation = tokenizer.apply_chat_template(
         messages, 
         tokenize=False, 
-        add_generation_prompt=False  # We want it to continue from the assistant's partial response
+        add_generation_prompt=True  # We want the model to generate a fresh assistant response
     )
-    remove_think = "<think>\n\n</think>\n\n"
-    formatted_conversation = formatted_conversation.replace(remove_think, "")
-    # Remove any EOS tokens to make the model think it's in continuation mode
-    if tokenizer.eos_token and tokenizer.eos_token in formatted_conversation:
-        formatted_conversation = formatted_conversation.replace(tokenizer.eos_token, "")
     
-    # Also remove common EOS patterns for different models
-    eos_patterns = ["</s>", "<|im_end|>", "<|endoftext|>", "</assistant>", "<|end|>"]
-    for pattern in eos_patterns:
-        formatted_conversation = formatted_conversation.replace(pattern, "")
-    
-    formatted_conversation = formatted_conversation.rstrip()
-
     return formatted_conversation
 
+def compare_fake_vs_real(fake_prompt: str, real_prompt: str, item_num: int) -> None:
+    """
+    Compare fake token prompt vs real template prompt and print differences.
+    """
+    print(f"\n🔍 COMPARISON FOR ITEM {item_num}:")
+    print(f"{'='*60}")
+    print(f"🎭 FAKE TOKEN PROMPT:")
+    print(repr(fake_prompt))
+    print(f"\n🎯 REAL TEMPLATE PROMPT:")
+    print(repr(real_prompt))
+    print(f"\n📊 EXACT MATCH: {'✅ YES' if fake_prompt == real_prompt else '❌ NO'}")
+    
+    if fake_prompt != real_prompt:
+        print(f"📏 Length difference: {len(fake_prompt) - len(real_prompt)} chars")
+        
+        # Find first difference
+        for i, (f, r) in enumerate(zip(fake_prompt, real_prompt)):
+            if f != r:
+                print(f"🔍 First difference at position {i}:")
+                print(f"   Fake: {repr(fake_prompt[max(0, i-10):i+10])}")
+                print(f"   Real: {repr(real_prompt[max(0, i-10):i+10])}")
+                break
+    
+    print(f"{'='*60}\n")
+
+def create_straight_prompt(user_question: str, starter_text: str, add_response: bool = True) -> str:
+    """
+    Creates a straight prompt with no chat formatting whatsoever.
+    Just raw text input.
+    """
+    if add_response:
+        straight_prompt = f"""{user_question}\n\n{starter_text}"""
+    else:
+        straight_prompt = user_question
+    
+    return straight_prompt
+
 def generate_completion(model, tokenizer, formatted_prompt: str, max_new_tokens: int = 500) -> str:
-    """Generate completion using raw token completion."""
+    """Generate completion using traditional chat completion."""
     
     # Tokenize the formatted prompt
     inputs = tokenizer(formatted_prompt, return_tensors="pt")
@@ -177,7 +265,7 @@ def generate_completion(model, tokenizer, formatted_prompt: str, max_new_tokens:
     device = next(model.parameters()).device
     inputs = {k: v.to(device) for k, v in inputs.items()}
     
-    # Generate response using raw completion
+    # Generate response using standard chat completion
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -202,20 +290,18 @@ def clean_model_name(model_name: str) -> str:
 
 def main():
     # Configuration - change these variables as needed
-    # model_name = 'Qwen/Qwen3-4B' 
-    # model_name = 'Qwen/Qwen3-1.7B'
-    model_name = 'meta-llama/Llama-2-7b-chat-hf'
-    # model_name = 'Qwen/Qwen3-4B-Instruct-2507'
+    model_name = 'Qwen/Qwen3-4B-Instruct-2507'
+    # model_name = 'meta-llama/Llama-2-7b-chat-hf'
     # model_name = 'meta-llama/Llama-3.1-8B-Instruct'
-
+    
+    add_response = False  # Set to False to only use question, True to include starter text
     max_new_tokens = 1000
     n = 100  # Number of items to process (set to 0 for all)
 
     model_folder_name = clean_model_name(model_name)
     
     # Load the dataset
-    dataset_file = '/mnt/SSD7/kartik/reasoning/dataset/qa_harmless.json'
-    data_type = dataset_file.split('/')[-1].split('.')[0].replace('qa_', '')
+    dataset_file = '/mnt/SSD7/kartik/reasoning/dataset/qa_harmful.json'
     print(f"📖 Loading dataset from: {dataset_file}")
     
     with open(dataset_file, 'r') as f:
@@ -233,48 +319,60 @@ def main():
     
     # Process each question-response pair
     generation_results = []
-    print("🎣 Generating completions using Double Hook strategy...")
+    print("🧪 Testing 3 versions: no chat, real chat, and fake tokens...")
     
     for i, item in enumerate(tqdm(data, desc="Processing items")):
         question = item.get('question', '')
         original_response = item.get('response', '')
         
         try:
-            # Create the jailbreak conversation using Double Hook strategy
-            formatted_prompt = create_jailbreak_conversation(tokenizer, question, original_response, model_name)
-            
-            # Get the starter text for reference
+            # Get the starter text using the same Double Hook strategy
             starter_text = get_starter_text(original_response)
             
-            # Generate completion
-            generated_response = generate_completion(model, tokenizer, formatted_prompt, max_new_tokens)
+            # Create all 3 prompts
+            fake_prompt = create_fake_token_prompt(question, starter_text, model_name, add_response)
+            real_prompt = create_real_chat_completion_prompt(tokenizer, question, starter_text, add_response)
+            straight_prompt = create_straight_prompt(question, starter_text, add_response)
             
-            # Combine starter text and generated response for full completion
-            full_generated = starter_text + " " + generated_response
+            # Compare fake vs real prompts for first few items (optional check)
+            if i < 3:
+                compare_fake_vs_real(fake_prompt, real_prompt, i+1)
             
-            # Print detailed results
-            print(f"\n{'='*80}")
-            print(f"🔢 Item {i+1}/{len(data)}")
-            print(f"❓ QUESTION:")
-            print(question)
-            print(f"\n🎯 ORIGINAL RESPONSE:")
-            print(original_response[:200] + "..." if len(original_response) > 200 else original_response)
-            print(f"\n🎣 EXTRACTED STARTER TEXT:")
-            print(starter_text)
-            print(f"\n🔧 FORMATTED CONVERSATION PROMPT:")
-            print(formatted_prompt)
-            print(f"\n🤖 GENERATED COMPLETION:")
-            print(generated_response)
-            print(f"\n📝 FULL GENERATED RESPONSE:")
-            print(full_generated)
-            print(f"{'='*80}\n")
+            # Generate completions for all 3 versions
+            fake_generated = generate_completion(model, tokenizer, fake_prompt, max_new_tokens)
+            real_generated = generate_completion(model, tokenizer, real_prompt, max_new_tokens)
+            straight_generated = generate_completion(model, tokenizer, straight_prompt, max_new_tokens)
             
-            # Store result
+            # Print detailed results for first few items
+            if i < 3:
+                print(f"\n{'='*80}")
+                print(f"🔢 Item {i+1}/{len(data)}")
+                print(f"❓ QUESTION:")
+                print(question)
+                print(f"\n🎣 EXTRACTED STARTER TEXT:")
+                print(starter_text)
+                print(f"\n📝 STRAIGHT PROMPT (NO CHAT):")
+                print(straight_prompt)
+                print(f"\n🎯 REAL CHAT COMPLETION PROMPT:")
+                print(real_prompt)
+                print(f"\n🎭 FAKE TOKEN PROMPT:")
+                print(fake_prompt)
+                print(f"\n📝 NO CHAT GENERATION:")
+                print(straight_generated)
+                print(f"\n🎯 REAL CHAT GENERATION:")
+                print(real_generated)
+                print(f"\n🎭 FAKE CHAT GENERATION:")
+                print(fake_generated)
+                print(f"{'='*80}\n")
+            
+            # Store result in the requested format
             generation_results.append({
                 "qid": i,
-                "question": question,
-                "starter_text": starter_text,
-                "generated_completion": generated_response
+                "ques": question,
+                "starter_text": starter_text if starter_text else "",
+                "no_chat": straight_generated,
+                "real_chat": real_generated,
+                "fake_chat": fake_generated
             })
             
             # Memory cleanup every 5 items
@@ -286,23 +384,25 @@ def main():
             print(f"❌ Error processing item {i}: {e}")
             generation_results.append({
                 "qid": i,
-                "question": question,
+                "ques": question,
                 "starter_text": "",
-                "generated_completion": f"ERROR: {str(e)}"
+                "no_chat": f"ERROR: {str(e)}",
+                "real_chat": f"ERROR: {str(e)}",
+                "fake_chat": f"ERROR: {str(e)}"
             })
     
     # Calculate statistics
-    successful_count = len([r for r in generation_results if not r["generated_completion"].startswith("ERROR:")])
-    error_count = len([r for r in generation_results if r["generated_completion"].startswith("ERROR:")])
+    successful_count = len([r for r in generation_results if not (r.get("no_chat", "").startswith("ERROR:") or r.get("real_chat", "").startswith("ERROR:") or r.get("fake_chat", "").startswith("ERROR:"))])
+    error_count = len([r for r in generation_results if r.get("no_chat", "").startswith("ERROR:") or r.get("real_chat", "").startswith("ERROR:") or r.get("fake_chat", "").startswith("ERROR:")])
     
-    print(f"\n📊 Gaslighting Generation Summary:")
+    print(f"\n📊 Triple Generation Test Summary:")
     print(f"   Successful: {successful_count}")
     print(f"   Errors: {error_count}")
     print(f"   Total: {len(generation_results)}")
     
     # Prepare output data
     output_data = {
-        "generations": generation_results,
+        "test_results": generation_results,
         "summary": {
             "successful_count": successful_count,
             "error_count": error_count,
@@ -312,8 +412,8 @@ def main():
         "metadata": {
             "model": model_name,
             "source_file": dataset_file,
-            "generation_timestamp": datetime.now().isoformat(),
-            "method": "double_hook_gaslighting_generation",
+            "test_timestamp": datetime.now().isoformat(),
+            "method": "triple_generation_comparison",
             "settings": {
                 "temperature": 0.7,
                 "top_p": 0.9,
@@ -324,16 +424,16 @@ def main():
     }
     
     # Create output directory and save results
-    output_dir = f'/mnt/SSD7/kartik/reasoning/responses/gaslighting_generation/{model_folder_name}'
+    output_dir = f'/mnt/SSD7/kartik/reasoning/responses/real_fake/{model_folder_name}'
     os.makedirs(output_dir, exist_ok=True)
     
-    output_file = os.path.join(output_dir, f'gaslighting_generation_results_{data_type}.json')
+    output_file = os.path.join(output_dir, 'triple_generation_results.json')
     
     print(f"💾 Saving results to: {output_file}")
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
     
-    print(f"✅ Gaslighting generation complete!")
+    print(f"✅ Triple generation test complete!")
     print(f"📁 Results saved to: {output_file}")
     print(f"📈 Success rate: {output_data['summary']['success_rate']:.1f}%")
 
