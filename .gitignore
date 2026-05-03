@@ -1,0 +1,42 @@
+# Local configuration and secrets
+.env
+!.env.example
+
+# Generated experiment outputs
+artifacts/
+external/
+data/
+responses/
+residuals/
+outputs/
+logs/
+checkpoints/
+wandb/
+mlruns/
+
+# Model/data/cache artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.npy
+*.npz
+*.csv
+*.jsonl
+
+# Python and notebook cache files
+__pycache__/
+*.py[cod]
+*_temp.py
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual environments and local editor files
+.venv/
+venv/
+env/
+.vscode/
+.idea/
