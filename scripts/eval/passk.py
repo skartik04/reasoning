@@ -2,8 +2,8 @@
 """
 Multiple response generation script for transformer models.
 
-This script generates k responses for a given set of instructions using a 
-transformer model (e.g., Qwen-1_8B-Chat). It supports both standard top-p 
+This script generates k responses for a given set of instructions using a
+transformer model (e.g., Qwen-1_8B-Chat). It supports both standard top-p
 sampling and generation with custom hooks applied to the model's residual stream.
 
 Key Features:
@@ -34,7 +34,7 @@ def make_actadd_hook(direction: torch.Tensor, scale: float = 1.0, device=None):
     """Create a hook to add a scaled direction to the residual stream."""
     if device is not None:
         direction = direction.to(device)
-    
+
     def hook(resid_pre, hook):
         if device is None:
             direction_device = direction.to(resid_pre.device)
@@ -47,13 +47,13 @@ def make_ablation_hook(direction: torch.Tensor, device=None):
     """Create a hook to ablate (remove) a direction from the residual stream."""
     if device is not None:
         direction = direction.to(device)
-    
+
     def hook(resid_pre, hook):
         if device is None:
             direction_ = direction.to(resid_pre.device)
         else:
             direction_ = direction
-        
+
         proj_coeff = einops.einsum(
             resid_pre, direction_, "... d_model, d_model -> ..."
         )
@@ -82,28 +82,28 @@ def _generate_with_hooks(
         for _ in range(max_tokens_generated):
             with model.hooks(fwd_hooks=fwd_hooks):
                 logits = model(all_toks)
-            
+
             next_token_logits = logits[:, -1, :]
-            
+
             if do_sample and temperature > 0:
                 next_token_logits = next_token_logits / temperature
-                
+
                 if top_p < 1.0:
                     sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
                     cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
                     sorted_indices_to_remove = cumulative_probs > top_p
                     sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
                     sorted_indices_to_remove[..., 0] = 0
-                    
+
                     for i in range(toks.shape[0]):
                         indices_to_remove = sorted_indices[i][sorted_indices_to_remove[i]]
                         next_token_logits[i, indices_to_remove] = float('-inf')
-                
+
                 probs = torch.softmax(next_token_logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1)
             else:
                 next_token = next_token_logits.argmax(dim=-1).unsqueeze(1)
-            
+
             all_toks = torch.cat([all_toks, next_token], dim=1)
 
     full_texts = model.to_string(all_toks)
@@ -148,18 +148,18 @@ def evaluate_refusal_with_hooks(
     """Evaluate refusal behavior with hooks applied."""
     if test_indices is None:
         test_indices = list(range(min(16, len(instructions))))
-    
+
     positions = range(tokens_to_consider)
     refusal_matrix = torch.zeros((model.cfg.n_layers, tokens_to_consider), dtype=torch.int)
-    
+
     with torch.no_grad():
         for layer in tqdm(range(model.cfg.n_layers), desc="Layers"):
             for pos in positions:
-                direction = avg_direction[layer, pos] 
+                direction = avg_direction[layer, pos]
                 direction = direction / direction.norm()
                 hook_fn_add = make_actadd_hook(direction, scale=scale, device=model.cfg.device)
                 fwd_hooks_add = [(f"blocks.{layer}.hook_resid_pre", hook_fn_add)]
-                
+
                 for idx in test_indices:
                     model.reset_hooks()
                     if idx < len(instructions):
@@ -168,7 +168,7 @@ def evaluate_refusal_with_hooks(
                         logits = get_last_token_logits(model, tokens, fwd_hooks=fwd_hooks_add)
                         greedy_tokens = logits.argmax(dim=-1)
                         refusal_matrix[layer, pos] += int(greedy_tokens.item() in QWEN_REFUSAL_TOKS)
-    
+
     return refusal_matrix
 
 def evaluate_bypass_with_hooks(
@@ -182,14 +182,14 @@ def evaluate_bypass_with_hooks(
     """Evaluate bypass behavior (ablation) with hooks applied."""
     if test_indices is None:
         test_indices = list(range(min(16, len(instructions))))
-    
+
     positions = range(tokens_to_consider)
     bypass_matrix = torch.zeros((model.cfg.n_layers, tokens_to_consider), dtype=torch.int)
-    
+
     with torch.no_grad():
         for layer in tqdm(range(model.cfg.n_layers), desc="Layers"):
             for pos in positions:
-                direction = avg_direction[layer, pos] 
+                direction = avg_direction[layer, pos]
                 direction = direction / direction.norm()
                 hook_fn_ablation = make_ablation_hook(direction, device=model.cfg.device)
                 fwd_hooks_ablation = [
@@ -197,7 +197,7 @@ def evaluate_bypass_with_hooks(
                     (f"blocks.{layer}.hook_resid_mid", hook_fn_ablation),
                     (f"blocks.{layer}.hook_resid_post", hook_fn_ablation)
                 ]
-                
+
                 for idx in test_indices:
                     model.reset_hooks()
                     if idx < len(instructions):
@@ -206,7 +206,7 @@ def evaluate_bypass_with_hooks(
                         logits = get_last_token_logits(model, tokens, fwd_hooks=fwd_hooks_ablation)
                         greedy_tokens = logits.argmax(dim=-1)
                         bypass_matrix[layer, pos] += int(greedy_tokens.item() in QWEN_REFUSAL_TOKS)
-    
+
     return bypass_matrix
 
 class MultiResponseGenerator:
@@ -215,49 +215,49 @@ class MultiResponseGenerator:
         self.model_name = model_name
         self.device = torch.device(device)
         self.verbose = verbose
-        
+
         # Load model
         print(f"Loading model: {model_name}")
         self.model = HookedTransformer.from_pretrained(
-            model_name, 
+            model_name,
             device=self.device,
             trust_remote_code=True
         )
-        
+
         # Chat template for Qwen
         self.chat_template = """<|im_start|>user
 {instruction}<|im_end|>
 <|im_start|>assistant
 """
-        
+
     def get_prompt(self, instruction: str) -> str:
         """Format instruction with chat template."""
         return self.chat_template.format(instruction=instruction)
-    
+
     def get_prompt_tokens(self, instruction: str) -> torch.Tensor:
         """Tokenize the formatted prompt."""
         return self.model.to_tokens(self.get_prompt(instruction))
-    
+
     def tokenize_chat(self, prompts: List[str]) -> torch.Tensor:
         """Tokenize multiple prompts with chat formatting."""
         formatted = [self.get_prompt(p) for p in prompts]
         return self.model.to_tokens(formatted)
-    
-    def generate_k_responses_with_hooks(self, instruction: str, k: int = 5, max_tokens: int = 64, 
+
+    def generate_k_responses_with_hooks(self, instruction: str, k: int = 5, max_tokens: int = 64,
                                        fwd_hooks = [], seed: int = 42, instruction_id: int = 0,
-                                       temperature: float = 0.7, top_p: float = 0.9, 
+                                       temperature: float = 0.7, top_p: float = 0.9,
                                        do_sample: bool = True) -> List[str]:
         """Generate k responses for a single instruction using hooks and sampling."""
         tokens = self.get_prompt_tokens(instruction)
         responses = []
-        
+
         if self.verbose:
             print(f"\nInstruction: {instruction}")
             if do_sample:
                 print(f"Generating {k} responses with hooks (temperature={temperature}, top_p={top_p})...")
             else:
                 print(f"Generating {k} responses with hooks (greedy decoding)...")
-        
+
         for i in range(k):
             try:
                 # Set seed for reproducible variability
@@ -266,7 +266,7 @@ class MultiResponseGenerator:
                 random.seed(response_seed)
                 if torch.cuda.is_available():
                     torch.cuda.manual_seed(response_seed)
-                
+
                 # Use the hooks-based generation with sampling
                 completions = _generate_with_hooks(
                     self.model,
@@ -277,43 +277,43 @@ class MultiResponseGenerator:
                     top_p=top_p,
                     do_sample=do_sample
                 )
-                
+
                 response = completions[0] if completions else ""
                 responses.append(response.strip())
-                
+
                 if self.verbose:
                     print(f"Response {i+1}: {response.strip()}")
-                
+
             except Exception as e:
                 error_msg = f"ERROR: {str(e)}"
                 print(f"Error generating response {i+1} for instruction: {e}")
                 responses.append(error_msg)
-                
+
                 if self.verbose:
                     print(f"Response {i+1}: {error_msg}")
-        
+
         return responses
-    
-    def generate_k_responses(self, instruction: str, k: int = 5, max_tokens: int = 64, 
-                           top_p: float = 0.9, temperature: float = 0.7, fwd_hooks = [], 
+
+    def generate_k_responses(self, instruction: str, k: int = 5, max_tokens: int = 64,
+                           top_p: float = 0.9, temperature: float = 0.7, fwd_hooks = [],
                            seed: int = 42, instruction_id: int = 0) -> List[str]:
         """Generate k responses for a single instruction."""
-        
+
         # If hooks are provided, use hook-based generation (with sampling)
         if fwd_hooks:
             return self.generate_k_responses_with_hooks(
                 instruction, k, max_tokens, fwd_hooks, seed, instruction_id,
                 temperature=temperature, top_p=top_p, do_sample=True
             )
-        
+
         # Otherwise, use standard sampling for diverse responses.
         tokens = self.get_prompt_tokens(instruction)
         responses = []
-        
+
         if self.verbose:
             print(f"\nInstruction: {instruction}")
             print(f"Generating {k} responses with sampling (temp={temperature}, top_p={top_p})...")
-        
+
         for i in range(k):
             try:
                 response_seed = seed + instruction_id * 1000 + i
@@ -321,7 +321,7 @@ class MultiResponseGenerator:
                 random.seed(response_seed)
                 if torch.cuda.is_available():
                     torch.cuda.manual_seed(response_seed)
-                
+
                 with torch.no_grad():
                     generated = self.model.generate(
                         tokens,
@@ -330,26 +330,26 @@ class MultiResponseGenerator:
                         top_p=top_p,
                         do_sample=True
                     )
-                
+
                 prompt_length = tokens.shape[-1]
                 generated_tokens = generated[0, prompt_length:]
                 response = self.model.to_string(generated_tokens)
                 responses.append(response.strip())
-                
+
                 if self.verbose:
                     print(f"Response {i+1}: {response.strip()}")
-                
+
             except Exception as e:
                 error_msg = f"ERROR: {str(e)}"
                 print(f"Error generating response {i+1} for instruction: {e}")
                 responses.append(error_msg)
-                
+
                 if self.verbose:
                     print(f"Response {i+1}: {error_msg}")
-        
+
         return responses
 
-    def process_dataset(self, instructions: List[str], dataset_path: str, k: int = 5, 
+    def process_dataset(self, instructions: List[str], dataset_path: str, k: int = 5,
                        max_tokens: int = 64, top_p: float = 0.9, temperature: float = 0.7,
                        fwd_hooks = [], seed: int = 42, greedy_when_hooked: bool = False) -> Dict[str, Any]:
         """Process a dataset and generate k responses for each instruction."""
@@ -370,7 +370,7 @@ class MultiResponseGenerator:
                 'timestamp': datetime.now().isoformat()
             }
         }
-        
+
         if fwd_hooks:
             if greedy_when_hooked:
                 print(f"Using {len(fwd_hooks)} forward hooks with greedy decoding")
@@ -396,29 +396,29 @@ class MultiResponseGenerator:
                     seed=seed,
                     instruction_id=i
                 )
-            
+
             responses_dict = {}
             for j, response in enumerate(responses):
                 responses_dict[str(j)] = response
-            
+
             instruction_result = {
                 'instruction_id': i,
                 'instruction': instruction,
                 'responses': responses_dict
             }
-            
+
             results['responses'].append(instruction_result)
-        
+
         return results
-    
+
     def save_results(self, results: Dict[str, Any], output_path: str):
         """Save results to JSON file."""
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         with open(output_path, 'w') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
-        
+
         print(f"Results saved to: {output_path}")
 
 def load_dataset_json(path: str) -> List[str]:
@@ -427,16 +427,16 @@ def load_dataset_json(path: str) -> List[str]:
         data = json.load(f)
     return [item['instruction'] for item in data]
 
-def create_hooks_from_direction(avg_direction: torch.Tensor, layer: int, pos: int, 
+def create_hooks_from_direction(avg_direction: torch.Tensor, layer: int, pos: int,
                                hook_type: str = "actadd", scale: float = 1.0, device=None) -> List:
     """Create hooks from avg_direction data."""
     direction = avg_direction[layer, pos]
     direction = direction / direction.norm()
-    
+
     if hook_type == "actadd":
         hook_fn = make_actadd_hook(direction, scale=scale, device=device)
         return [(f"blocks.{layer}.hook_resid_pre", hook_fn)]
-    
+
     elif hook_type == "ablation":
         hook_fn = make_ablation_hook(direction, device=device)
         return [
@@ -444,7 +444,7 @@ def create_hooks_from_direction(avg_direction: torch.Tensor, layer: int, pos: in
             (f"blocks.{layer}.hook_resid_mid", hook_fn),
             (f"blocks.{layer}.hook_resid_post", hook_fn)
         ]
-    
+
     else:
         raise ValueError(f"Unknown hook_type: {hook_type}. Use 'actadd' or 'ablation'")
 
@@ -480,7 +480,7 @@ if __name__ == "__main__":
 
     # Load dataset
     print("Loading dataset...")
-    
+
 
     print(f"Loaded {len(instructions)} instructions")
 
@@ -523,13 +523,13 @@ if __name__ == "__main__":
 
     print(f"\nGeneration complete!")
     print(f"Results: {output_dir / filename}")
-    
+
     # Example of how to run refusal evaluation with hooks (commented out):
     # if avg_direction is loaded:
     # refusal_matrix = evaluate_refusal_with_hooks(
-    #     generator.model, 
-    #     sample_instructions, 
-    #     generator.tokenize_chat, 
+    #     generator.model,
+    #     sample_instructions,
+    #     generator.tokenize_chat,
     #     avg_direction,
     #     tokens_to_consider=5
     # )

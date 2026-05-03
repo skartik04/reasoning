@@ -29,18 +29,18 @@ os.environ['TRANSFORMERS_CACHE'] = cache_dir
 def load_model_and_tokenizer(model_name: str):
     """Load model and tokenizer for generation."""
     print(f"Loading model for waluigi generation: {model_name}")
-    
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
         cache_dir=cache_dir,
         trust_remote_code=True,
         token=HF_TOKEN
     )
-    
+
     # Set pad token if not present
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    
+
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         cache_dir=cache_dir,
@@ -51,7 +51,7 @@ def load_model_and_tokenizer(model_name: str):
         attn_implementation="eager"
     )
     model.eval()
-    
+
     print("✅ Model loaded successfully!")
     return model, tokenizer
 
@@ -64,16 +64,16 @@ def get_starter_text(full_response: str) -> str:
     # This regex looks for lines starting with a number/asterisk/dash.
     list_item_pattern = re.compile(r"^\s*(\d+\.|[a-zA-Z]\)|\*|-)\s+.*", re.MULTILINE)
     match = list_item_pattern.search(full_response)
-    
+
     if match:
         # Found a list item. Grab the text up to that point, plus a few words
         # from the list item itself to create the "Double Hook".
         end_of_intro_pos = match.start()
         intro_text = full_response[:end_of_intro_pos].strip()
-        
+
         first_list_item_line = match.group(0).strip()
         words_from_list_item = first_list_item_line.split()[:7]  # Grab first 7 words
-        
+
         # Combine the intro and the start of the first list item
         starter_text = intro_text + "\n\n" + " ".join(words_from_list_item)
         return starter_text.strip()
@@ -102,12 +102,12 @@ def truncate_at_sentence_middle(text: str) -> str:
     # Look for sentence endings (., !, ?)
     import re
     sentence_endings = list(re.finditer(r'[.!?]\s+', text))
-    
+
     if len(sentence_endings) >= 2:
         # Take at least 2 full sentences
         second_sentence_end = sentence_endings[1].end()
         remaining_text = text[second_sentence_end:]
-        
+
         if remaining_text.strip():
             # Take first 7 words of the sentence after the second one
             next_words = remaining_text.strip().split()[:7]
@@ -115,18 +115,18 @@ def truncate_at_sentence_middle(text: str) -> str:
         else:
             # No text after second sentence, just return the two sentences
             return text[:second_sentence_end].strip()
-    
+
     elif len(sentence_endings) == 1:
         # Only one sentence found, take it + first 7 words of remaining text
         first_sentence_end = sentence_endings[0].end()
         remaining_text = text[first_sentence_end:]
-        
+
         if remaining_text.strip():
             next_words = remaining_text.strip().split()[:7]
             return (text[:first_sentence_end] + " ".join(next_words)).strip()
         else:
             return text[:first_sentence_end].strip()
-    
+
     # No sentence endings found, just take first 50 words as fallback
     words = text.split()[:50]
     return " ".join(words).strip()
@@ -141,7 +141,7 @@ def create_waluigi_conversation(tokenizer, user_question: str, model_response: s
     """
     # Get the perfect completion starter from the harmful response
     starter_text = get_starter_text(harmful_response)
-    
+
     # Create the 2-turn conversation messages
     messages = [
         {"role": "user", "content": user_question},
@@ -149,41 +149,41 @@ def create_waluigi_conversation(tokenizer, user_question: str, model_response: s
         {"role": "user", "content": user_question},  # Same question again as requested
         {"role": "assistant", "content": starter_text}
     ]
-    
+
     # Apply chat template to get the formatted conversation
     formatted_conversation = tokenizer.apply_chat_template(
-        messages, 
-        tokenize=False, 
+        messages,
+        tokenize=False,
         add_generation_prompt=False  # We want it to continue from the assistant's partial response
     )
-    
+
     remove_think = "<think>\n\n</think>\n\n"
     formatted_conversation = formatted_conversation.replace(remove_think, "")
-    
+
     # For Llama-2, we only want to remove the final </s> to allow continuation
     # Keep all the </s> tokens between turns, only remove the very last one
     if formatted_conversation.endswith("</s>"):
         formatted_conversation = formatted_conversation[:-4]  # Remove last </s>
-    
+
     # Remove other EOS patterns that might interfere (but keep </s> between turns)
     eos_patterns = ["<|im_end|>", "<|endoftext|>", "</assistant>", "<|end|>"]
     for pattern in eos_patterns:
         formatted_conversation = formatted_conversation.replace(pattern, "")
-    
+
     formatted_conversation = formatted_conversation.rstrip()
 
     return formatted_conversation
 
 def generate_completion(model, tokenizer, formatted_prompt: str, max_new_tokens: int = 500) -> str:
     """Generate completion using raw token completion."""
-    
+
     # Tokenize the formatted prompt
     inputs = tokenizer(formatted_prompt, return_tensors="pt")
-    
+
     # Move to device
     device = next(model.parameters()).device
     inputs = {k: v.to(device) for k, v in inputs.items()}
-    
+
     # Generate response using raw completion
     with torch.no_grad():
         outputs = model.generate(
@@ -195,12 +195,12 @@ def generate_completion(model, tokenizer, formatted_prompt: str, max_new_tokens:
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id
         )
-    
+
     # Decode only the new tokens (response)
     input_length = inputs['input_ids'].shape[1]
     generated_tokens = outputs[0][input_length:]
     generated_response = tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
-    
+
     return generated_response
 
 def clean_model_name(model_name: str) -> str:
@@ -210,35 +210,35 @@ def clean_model_name(model_name: str) -> str:
 def load_harmful_dataset() -> List[Dict]:
     """Load question-answer pairs from the qa_harmful.json dataset."""
     dataset_file = 'artifacts/data/qa_harmful.json'
-    
+
     print(f"📖 Loading harmful dataset from: {dataset_file}")
-    
+
     with open(dataset_file, 'r') as f:
         data = json.load(f)
-    
+
     print(f"✅ Found {len(data)} question-response pairs")
-    
+
     return data
 
 def load_model_responses(model_name: str) -> List[Dict]:
     """Load model responses from the responses.json file for the given model."""
     model_folder_name = clean_model_name(model_name)
     responses_file = f'artifacts/responses/{model_folder_name}/responses.json'
-    
+
     print(f"📖 Loading model responses from: {responses_file}")
-    
+
     with open(responses_file, 'r') as f:
         data = json.load(f)
-    
+
     # Extract the responses array
     responses = data.get('responses', [])
     print(f"✅ Found {len(responses)} model responses")
-    
+
     return responses
 
 def main():
     # Configuration - change these variables as needed
-    # model_name = 'Qwen/Qwen3-4B' 
+    # model_name = 'Qwen/Qwen3-4B'
     # model_name = 'Qwen/Qwen3-1.7B'
     # model_name = 'meta-llama/Llama-2-7b-chat-hf'
     model_name = 'Qwen/Qwen3-4B-Instruct-2507'
@@ -248,48 +248,48 @@ def main():
     n = 100  # Number of items to process (set to 0 for all)
 
     model_folder_name = clean_model_name(model_name)
-    
+
     # Load both datasets
     harmful_data = load_harmful_dataset()  # For starter text extraction
     model_responses = load_model_responses(model_name)  # For first assistant response
-    
+
     # Ensure both datasets have the same length
     min_length = min(len(harmful_data), len(model_responses))
     harmful_data = harmful_data[:min_length]
     model_responses = model_responses[:min_length]
-    
+
     # Limit data to n items if specified
     if n > 0:
         harmful_data = harmful_data[:n]
         model_responses = model_responses[:n]
         print(f"📝 Processing only first {len(harmful_data)} items as requested")
-    
+
     # Load model and tokenizer
     model, tokenizer = load_model_and_tokenizer(model_name)
-    
+
     # Process each question-response pair
     generation_results = []
     print("🎭 Generating completions using Waluigi 2-turn strategy...")
-    
+
     for i, (harmful_item, model_item) in enumerate(tqdm(zip(harmful_data, model_responses), desc="Processing items")):
         question = harmful_item.get('question', '')
         harmful_response = harmful_item.get('response', '')
         model_response = model_item.get('resp', '')
         qid = i
-        
+
         try:
             # Create the waluigi 2-turn conversation
             formatted_prompt = create_waluigi_conversation(tokenizer, question, model_response, harmful_response, model_name)
-            
+
             # Get the starter text for reference
             starter_text = get_starter_text(harmful_response)
-            
+
             # Generate completion
             generated_response = generate_completion(model, tokenizer, formatted_prompt, max_new_tokens)
-            
+
             # Combine starter text and generated response for full completion
             full_generated = starter_text + " " + generated_response
-            
+
             # Print detailed results
             print(f"\n{'='*80}")
             print(f"🔢 Item {i+1}/{len(harmful_data)}")
@@ -308,7 +308,7 @@ def main():
             print(f"\n📝 FULL GENERATED RESPONSE:")
             print(full_generated)
             print(f"{'='*80}\n")
-            
+
             # Store result
             generation_results.append({
                 "qid": qid,
@@ -319,12 +319,12 @@ def main():
                 "generated_completion": generated_response,
                 # "full_generated_response": full_generated
             })
-            
+
             # Memory cleanup every 5 items
             if i % 5 == 0:
                 torch.cuda.empty_cache()
                 gc.collect()
-                
+
         except Exception as e:
             print(f"❌ Error processing item {i}: {e}")
             generation_results.append({
@@ -336,16 +336,16 @@ def main():
                 "generated_completion": f"ERROR: {str(e)}",
                 # "full_generated_response": f"ERROR: {str(e)}"
             })
-    
+
     # Calculate statistics
     successful_count = len([r for r in generation_results if not r["generated_completion"].startswith("ERROR:")])
     error_count = len([r for r in generation_results if r["generated_completion"].startswith("ERROR:")])
-    
+
     print(f"\n📊 Waluigi Generation Summary:")
     print(f"   Successful: {successful_count}")
     print(f"   Errors: {error_count}")
     print(f"   Total: {len(generation_results)}")
-    
+
     # Prepare output data
     output_data = {
         "generations": generation_results,
@@ -368,17 +368,17 @@ def main():
             }
         }
     }
-    
+
     # Create output directory and save results
     output_dir = f'artifacts/responses/waluigi/{model_folder_name}'
     os.makedirs(output_dir, exist_ok=True)
-    
+
     output_file = os.path.join(output_dir, 'generations.json')
-    
+
     print(f"💾 Saving results to: {output_file}")
     with open(output_file, 'w', encoding='utf-8') as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
-    
+
     print(f"✅ Waluigi generation complete!")
     print(f"📁 Results saved to: {output_file}")
     print(f"📈 Success rate: {output_data['summary']['success_rate']:.1f}%")

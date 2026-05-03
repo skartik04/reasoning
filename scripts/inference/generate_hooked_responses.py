@@ -55,35 +55,35 @@ def generate_response_hooked(model: HookedTransformer, question: str, max_new_to
     """Generate response for a given question using HookedTransformer."""
     # Format the question with QWEN chat template
     formatted_prompt = get_prompt(question)
-    
+
     # Get tokens using HookedTransformer
     prompt_tokens = model.to_tokens(formatted_prompt)
-    
+
     # Generate response using model.generate (like in notebook) - this properly handles end tokens
     generated_tokens = model.generate(
-        prompt_tokens, 
+        prompt_tokens,
         max_new_tokens=max_new_tokens,
         do_sample=True,
         temperature=0.7,
         top_p=0.9
     )
-    
+
     # Convert to string and extract only the response part (after the prompt)
     full_text = model.to_string(generated_tokens)
-    
+
     # Handle case where to_string returns a list (when batch_size > 1)
     if isinstance(full_text, list):
         full_text = full_text[0]  # Take the first (and only) item
-    
+
     response = full_text[len(formatted_prompt):].strip()
-    
+
     return formatted_prompt, response
 
 def print_generation_details(qid: int, question: str, formatted_prompt: str, response: str, verbose: bool = False):
     """Print detailed information about the generation process."""
     if not verbose:
         return
-    
+
     print(f"\n{'='*80}")
     print(f"🔢 Question ID: {qid}")
     print(f"❓ Original Question:")
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     # ========== CONFIGURATION - CHANGE THESE VARIABLES ==========
     model_name = 'Qwen/Qwen-1_8B-Chat'  # HookedTransformer model name
     device = 'cuda:0'  # Device for HookedTransformer
-    
+
     dataset_path = "artifacts/data/splits/harmful_test.json"  # Path to your dataset file or HuggingFace dataset name
     question_column = "instruction"  # Column name containing questions in your dataset
     output_file = "responses.json"  # Output JSON file path
@@ -106,48 +106,48 @@ if __name__ == "__main__":
     n = 100  # number of questions to generate responses for
     verbose = True  # Print detailed generation information
     # ============================================================
-    
+
     print(f"🚀 Starting response generation with model: {model_name}")
     print(f"📊 Dataset: {dataset_path}")
-    
+
     # Load model using HookedTransformer
     print(f"Loading model: {model_name}")
     model = HookedTransformer.from_pretrained(
-        model_name, 
+        model_name,
         device=device,
         trust_remote_code=True,
     )
-    
+
     # Load questions
     print("📖 Loading questions...")
     all_questions = load_questions_dataset(dataset_path, question_column)
-    
+
     # Limit to n questions if specified
     questions = all_questions[:n] if n > 0 and n < len(all_questions) else all_questions
     print(f"✅ Loaded {len(all_questions)} total questions, processing {len(questions)} questions")
-    
+
     # Generate responses
     responses_data = []
     print("🤖 Generating responses...")
-    
+
     for qid, question in enumerate(tqdm(questions, desc="Processing questions")):
         try:
             formatted_prompt, response = generate_response_hooked(model, question, max_new_tokens)
-            
+
             # Print generation details if verbose is enabled
             print_generation_details(qid, question, formatted_prompt, response, verbose)
-            
+
             responses_data.append({
                 "qid": qid,
                 "ques": question,
                 "resp": response
             })
-            
+
             # Optional: Clean up GPU memory periodically
             if qid % 10 == 0:
                 torch.cuda.empty_cache()
                 gc.collect()
-                
+
         except Exception as e:
             print(f"❌ Error processing question {qid}: {e}")
             responses_data.append({
@@ -155,15 +155,15 @@ if __name__ == "__main__":
                 "ques": question,
                 "resp": f"ERROR: {str(e)}"
             })
-    
+
     # Create output directory structure
     model_folder_name = model_name.replace("/", "_").replace(":", "_")
     output_dir = os.path.join("artifacts/responses", model_folder_name)
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Create full output path
     output_path = os.path.join(output_dir, output_file)
-    
+
     # Prepare final output with responses first, then metadata
     final_output = {
         "responses": responses_data,
@@ -180,12 +180,12 @@ if __name__ == "__main__":
             "error_count": len([r for r in responses_data if r["resp"].startswith("ERROR:")])
         }
     }
-    
+
     # Save responses with metadata
     print(f"💾 Saving responses to {output_path}")
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(final_output, f, indent=2, ensure_ascii=False)
-    
+
     print(f"✅ Successfully generated responses for {len(responses_data)} questions!")
     print(f"📁 Output saved to: {output_path}")
     print(f"📊 Success: {final_output['metadata']['success_count']}, Errors: {final_output['metadata']['error_count']}")

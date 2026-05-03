@@ -29,18 +29,18 @@ os.environ['TRANSFORMERS_CACHE'] = cache_dir
 def load_model_and_tokenizer(model_name: str):
     """Load model and tokenizer with proper configuration."""
     print(f"Loading model: {model_name}")
-    
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
         cache_dir=cache_dir,
         trust_remote_code=True,
         token=HF_TOKEN
     )
-    
+
     # Set pad token if not present
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    
+
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         cache_dir=cache_dir,
@@ -51,7 +51,7 @@ def load_model_and_tokenizer(model_name: str):
         attn_implementation="eager"  # Use eager attention to avoid FlashAttention issues
     )
     model.eval()
-    
+
     print("✅ Model loaded successfully!")
     return model, tokenizer
 
@@ -61,8 +61,8 @@ def format_question_with_chat_template(tokenizer, question: str) -> str:
         # Use the tokenizer's built-in chat template
         messages = [{"role": "user", "content": question}]
         formatted = tokenizer.apply_chat_template(
-            messages, 
-            tokenize=False, 
+            messages,
+            tokenize=False,
             add_generation_prompt=True
         )
         return formatted
@@ -74,19 +74,19 @@ def generate_response(model, tokenizer, question: str, max_new_tokens: int = 512
     """Generate response for a given question using the model."""
     # Format the question with appropriate chat template
     formatted_prompt = format_question_with_chat_template(tokenizer, question)
-    
+
     # Tokenize the input
     inputs = tokenizer(
-        formatted_prompt, 
-        return_tensors="pt", 
-        padding=True, 
+        formatted_prompt,
+        return_tensors="pt",
+        padding=True,
         truncation=False  # Don't truncate - let us see if inputs are too long
     )
-    
+
     # Move inputs to the same device as model
     device = next(model.parameters()).device
     inputs = {k: v.to(device) for k, v in inputs.items()}
-    
+
     # Generate response
     with torch.no_grad():
         outputs = model.generate(
@@ -98,19 +98,19 @@ def generate_response(model, tokenizer, question: str, max_new_tokens: int = 512
             pad_token_id=tokenizer.eos_token_id,
             eos_token_id=tokenizer.eos_token_id,
         )
-    
+
     # Decode the generated text
     input_length = inputs['input_ids'].shape[1]
     generated_tokens = outputs[0][input_length:]
     response = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-    
+
     return formatted_prompt, response.strip()
 
 def print_generation_details(qid: int, question: str, formatted_prompt: str, response: str, verbose: bool = False):
     """Print detailed information about the generation process."""
     if not verbose:
         return
-    
+
     print(f"\n{'='*80}")
     print(f"🔢 Question ID: {qid}")
     print(f"❓ Original Question:")
@@ -166,43 +166,43 @@ if __name__ == "__main__":
     n = 100 # number of questions to generate responses for
     verbose = True  # Print detailed generation information
     # ============================================================
-    
+
     print(f"🚀 Starting response generation with model: {model_name}")
     print(f"📊 Dataset: {dataset_path}")
-    
+
     # Load model and tokenizer
     model, tokenizer = load_model_and_tokenizer(model_name)
-    
+
     # Load questions
     print("📖 Loading questions...")
     all_questions = load_questions_dataset(dataset_path, question_column)
-    
+
     # Limit to n questions if specified
     questions = all_questions[:n] if n > 0 and n < len(all_questions) else all_questions
     print(f"✅ Loaded {len(all_questions)} total questions, processing {len(questions)} questions")
-    
+
     # Generate responses
     responses_data = []
     print("🤖 Generating responses...")
-    
+
     for qid, question in enumerate(tqdm(questions, desc="Processing questions")):
         try:
             formatted_prompt, response = generate_response(model, tokenizer, question, max_new_tokens)
-            
+
             # Print generation details if verbose is enabled
             print_generation_details(qid, question, formatted_prompt, response, verbose)
-            
+
             responses_data.append({
                 "qid": qid,
                 "ques": question,
                 "resp": response
             })
-            
+
             # Optional: Clean up GPU memory periodically
             if qid % 10 == 0:
                 torch.cuda.empty_cache()
                 gc.collect()
-                
+
         except Exception as e:
             print(f"❌ Error processing question {qid}: {e}")
             responses_data.append({
@@ -210,15 +210,15 @@ if __name__ == "__main__":
                 "ques": question,
                 "resp": f"ERROR: {str(e)}"
             })
-    
+
     # Create output directory structure
     model_folder_name = model_name.replace("/", "_").replace(":", "_")
     output_dir = os.path.join("artifacts/responses", model_folder_name)
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Create full output path
     output_path = os.path.join(output_dir, output_file)
-    
+
     # Prepare final output with responses first, then metadata
     final_output = {
         "responses": responses_data,
@@ -235,12 +235,12 @@ if __name__ == "__main__":
             "error_count": len([r for r in responses_data if r["resp"].startswith("ERROR:")])
         }
     }
-    
+
     # Save responses with metadata
     print(f"💾 Saving responses to {output_path}")
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(final_output, f, indent=2, ensure_ascii=False)
-    
+
     print(f"✅ Successfully generated responses for {len(responses_data)} questions!")
     print(f"📁 Output saved to: {output_path}")
     print(f"📊 Success: {final_output['metadata']['success_count']}, Errors: {final_output['metadata']['error_count']}")

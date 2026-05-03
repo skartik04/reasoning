@@ -31,7 +31,7 @@ def tokenize_input(text):
 
 def generate_response(formatted_prompt, max_new_tokens=1000):
     inputs = tokenize_input(formatted_prompt).to(model.device)
-    
+
     with torch.no_grad():
         output_ids = model.generate(
             **inputs,
@@ -75,7 +75,7 @@ def main():
     # Load dataset
     print("Loading GSM8K dataset...")
     dataset = load_dataset("gsm8k", "main")
-    
+
     # Prepare data
     n = 30
     random.seed(0)
@@ -83,17 +83,17 @@ def main():
     qa_pairs = dataset['train'][indices]
     questions = qa_pairs['question']
     answers = qa_pairs['answer']
-    
+
     final_answers = []
     for answer in answers:
         numbers = re.findall(r'\d+', answer)
         final_answers.append(int(numbers[-1]) if numbers else '')
-    
+
     # Run experiments
     print(f"Running experiments on {n} questions...")
     results = []
     max_new_tokens = 10000
-    
+
     for i, question in enumerate(tqdm(questions)):
         result = {
             "question": question,
@@ -104,7 +104,7 @@ def main():
         formatted_think = format_prompt(prompt_think)
         response_think = generate_response(formatted_think, max_new_tokens=max_new_tokens)
         result["response_thinking"] = response_think
-        
+
         # Nothinking mode
         prompt_nothink = question + instructions(thinking=False)
         formatted_nothink = format_prompt(prompt_nothink)
@@ -122,7 +122,7 @@ def main():
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2)
-    
+
     print(f"Experiment completed! Results saved to {output_path}")
 
 if __name__ == "__main__":
