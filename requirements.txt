@@ -4,4 +4,8 @@ datasets
 openai>=1.0.0
 python-dotenv
 tqdm
-numpy 
+numpy
+huggingface_hub
+transformer-lens
+jaxtyping
+einops

@@ -1,57 +1,56 @@
-# Harmful Response Generator
+# Reasoning Experiments
 
-This script generates responses to harmful questions using the Qwen model in both "think" and "nothink" modes, then analyzes the responses using GPT-4o.
+This repository contains scripts and notebooks for studying reasoning, refusal behavior, and response generation across open and API-backed language models. The code focuses on harmful/harmless prompt datasets, think versus no-think generation, residual collection, safety judging, and pass@k-style response analysis.
+
+## Repository Layout
+
+- `src/reasoning/`: importable project utilities and the main harmful response generator module.
+- `scripts/inference/`: response generation and model-run orchestration scripts.
+- `scripts/eval/`: judging, labeling, and pass@k evaluation scripts.
+- `scripts/analysis/`: residual extraction and token/trajectory analysis scripts.
+- `notebooks/`: exploratory notebooks, grouped by topic.
+- `artifacts/`: ignored local folder for datasets, generated responses, residual tensors, plots, model caches, and other large outputs.
+- `external/`: ignored local folder for copied or cloned third-party repositories, if needed.
 
 ## Setup
 
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Create a .env file:**
-   Create a file named `.env` in the same directory as the script with your OpenAI API key:
-   ```
-   OPENAI_API_KEY=your_actual_openai_api_key_here
-   ```
-
-3. **Prepare your dataset:**
-   Make sure your harmful questions dataset is at `playground/dataset/splits/harmful_test.json`
-
-## Usage
-
-### Basic Usage
 ```bash
-python harmful_response_generator.py
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+cp .env.example .env
 ```
 
-### Configuration
-Edit the configuration variables in the script:
-- `n`: Number of questions to process (default: 10)
-- `dataset_path`: Path to your harmful questions dataset
-- `model_name`: Qwen model to use (default: "Qwen/Qwen3-1.7B")
-- `RUN_EXPERIMENTS`: Set to `True` to run think/nothink experiments
-- `CREATE_JOINT_JSON`: Set to `True` to create joint JSON file
-- `RUN_ANALYSIS`: Set to `True` to run GPT-4o analysis (requires OpenAI API key)
+Set `OPENAI_API_KEY` in `.env` for GPT-4o labeling or analysis. Set `HF_TOKEN` if you need gated Hugging Face models.
 
-### Output Files
-- `harmful_responses_think.json`: Responses in "think" mode
-- `harmful_responses_nothink.json`: Responses in "nothink" mode
-- `combined_harmful_responses.json`: Combined results
-- `joint_harmful_responses.json`: Joint format for analysis
-- `harmful_response_analysis.json`: GPT-4o analysis results
+## Data And Artifacts
 
-## Features
+Datasets and generated outputs are intentionally not tracked. Place local datasets under:
 
-1. **Think/Nothink Experiments**: Generates responses with and without the `/nothink` token
-2. **JSON Logging**: Saves all responses in structured JSON format
-3. **GPT-4o Analysis**: Uses OpenAI's GPT-4o to analyze response harmfulness
-4. **Configurable**: Easy to modify parameters and run specific steps
-5. **Error Handling**: Proper error handling for missing files and API issues
+```text
+artifacts/data/
+artifacts/data/splits/harmful_test.json
+artifacts/data/splits/harmless_test.json
+```
 
-## Notes
+Generated responses, residual tensors, figures, and model caches should stay under `artifacts/`. The default scripts use repo-root paths such as `artifacts/responses/`, `artifacts/results/`, `artifacts/residuals/`, and `artifacts/hf_cache/`.
 
-- The script uses greedy decoding for deterministic results
-- Rate limiting is applied for OpenAI API calls (1 second between requests)
-- Make sure you have sufficient GPU memory for the Qwen model
-- The GPT-4o analysis requires a valid OpenAI API key
+## Running Scripts
+
+Run commands from the repository root.
+
+```bash
+python -m reasoning.harmful_response_generator
+python scripts/inference/generate_responses.py
+python scripts/inference/gaslight_generation.py
+python scripts/eval/label_responses.py
+python scripts/eval/safety_judge.py
+python scripts/analysis/residual_generation.py
+```
+
+Most scripts have configuration constants near the bottom of the file. Check dataset paths, model names, sample counts, and whether GPT-4o analysis is enabled before running. Heavy model generation and evaluation can require substantial GPU memory and API usage.
+
+## Ignored Content
+
+The repo ignores local secrets, generated model outputs, datasets, checkpoints, residual tensors, plots, logs, model caches, virtual environments, notebook checkpoints, and copied external repositories. This keeps GitHub focused on runnable code and documentation while preserving local experiment artifacts in `artifacts/`.
